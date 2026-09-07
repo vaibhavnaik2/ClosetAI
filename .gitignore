@@ -1,0 +1,17 @@
+.DS_Store
+.gradle/
+**/build/
+local.properties
+.env
+.env.*
+*.jks
+*.keystore
+*.p12
+*.mobileprovision
+artifacts/
+
+backend/reference/
+supabase/.temp/
+
+**/.build/
+macos/ClosetAI/

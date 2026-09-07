@@ -6,12 +6,12 @@ plugins {
 
 android {
     namespace = "com.closetai.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.closetai.app"
         minSdk = 28
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 3
         versionName = "1.0.0-rc3"
 
@@ -47,4 +47,23 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+}
+
+android {
+    testOptions { unitTests.isIncludeAndroidResources = true }
+}
+dependencies {
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.test:core:1.6.1")
+}
+
+ tasks.withType<Test>().configureEach {
+    val testHome = layout.buildDirectory.dir("test-home").get().asFile
+    testHome.mkdirs()
+    systemProperty("user.home", testHome.absolutePath)
+    systemProperty("robolectric.dependency.repo.url", "https://repo.maven.apache.org/maven2")
+}
+dependencies {
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }

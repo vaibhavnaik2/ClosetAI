@@ -22,7 +22,27 @@ object ImageSanitizer {
         val length = resolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L
         require(length <= 0 || length <= maxInputBytes) { "Image exceeds 20 MB" }
 
-        val bitmap = resolver.openInputStream(uri)?.use(BitmapFactory::decodeStream)
+        // Providers may report unknown or dishonest lengths. Bound the stream itself.
+        val input = resolver.openInputStream(uri)?.use { stream ->
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(8192)
+            while (true) {
+                val count = stream.read(buffer)
+                if (count < 0) break
+                require(output.size().toLong() + count <= maxInputBytes) { "Image exceeds 20 MB" }
+                output.write(buffer, 0, count)
+            }
+            output.toByteArray()
+        } ?: throw IllegalArgumentException("Image could not be opened")
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(input, 0, input.size, bounds)
+        require(bounds.outWidth > 0 && bounds.outHeight > 0) { "Invalid image dimensions" }
+        require(bounds.outWidth.toLong() * bounds.outHeight <= 100_000_000L) { "Image dimensions are too large" }
+        val options = BitmapFactory.Options().apply { inSampleSize = 1 }
+        while (maxOf(bounds.outWidth, bounds.outHeight) / options.inSampleSize > maxDimension * 2) {
+            options.inSampleSize *= 2
+        }
+        val bitmap = BitmapFactory.decodeByteArray(input, 0, input.size, options)
             ?: throw IllegalArgumentException("Image could not be decoded")
 
         val scale = minOf(1f, maxDimension.toFloat() / maxOf(bitmap.width, bitmap.height).toFloat())
@@ -55,14 +75,16 @@ object ImageSanitizer {
         val root = DocumentFile.fromTreeUri(context, tree) ?: return emptyList()
         val result = mutableListOf<Uri>()
 
-        fun walk(node: DocumentFile) {
+        val visited = mutableSetOf<Uri>()
+        fun walk(node: DocumentFile, depth: Int = 0) {
+            if (depth > 32 || !visited.add(node.uri) || visited.size > 10000) return
             if (result.size >= limit) return
             if (node.isFile) {
                 if (node.type?.lowercase() in supported) result += node.uri
                 return
             }
             node.listFiles().forEach {
-                if (result.size < limit) walk(it)
+                if (result.size < limit) walk(it, depth + 1)
             }
         }
 

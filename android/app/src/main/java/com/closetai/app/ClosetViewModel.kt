@@ -10,6 +10,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.cancelChildren
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -56,13 +63,111 @@ class ClosetViewModel(application: Application) : AndroidViewModel(application) 
     var pendingExport by mutableStateOf<ByteArray?>(null)
         private set
 
+    private val sessionMutex = Mutex()
+    private val pendingWearRequests = mutableMapOf<String, String>()
+    var utilityData by mutableStateOf<Map<String, List<JSONObject>>>(emptyMap())
+        private set
+
+    private suspend fun loadUtilities(token: String) {
+        val tables = listOf("outfits", "wardrobe_collections", "packing_lists", "wear_events", "wardrobe_filter_presets", "packing_list_items", "wardrobe_collection_items", "outfit_plans")
+        utilityData = supervisorScope {
+            tables.map { table -> async { table to api.utilityRows(token, table) } }.map { it.await() }.toMap()
+        }
+    }
+
+    fun refreshUtilities() = runBusy { loadUtilities(currentSession().accessToken) }
+
+    fun createUtility(table: String, title: String) = runBusy {
+        require(table in setOf("wardrobe_collections", "packing_lists"))
+        require(title.trim().length in 1..100) { "Use a name between 1 and 100 characters" }
+        val s = currentSession()
+        val body = JSONObject().put("user_id", s.userId).put(if (table == "packing_lists") "title" else "name", title.trim())
+        api.addUtility(s.accessToken, table, body)
+        loadUtilities(s.accessToken)
+    }
+
+    fun addToUtility(table: String, parentId: String, itemId: String) = runBusy {
+        require(table in setOf("packing_list_items", "wardrobe_collection_items"))
+        require(items.any { it.id == itemId })
+        val s = currentSession()
+        val key = if (table == "packing_list_items") "packing_list_id" else "collection_id"
+        api.addUtility(s.accessToken, table, JSONObject().put(key, parentId).put("item_id", itemId))
+        loadUtilities(s.accessToken)
+    }
+
+    fun setPacked(listId: String, itemId: String, packed: Boolean) = runBusy {
+        val s = currentSession()
+        api.setPacked(s.accessToken, listId, itemId, packed)
+        loadUtilities(s.accessToken)
+    }
+
+    fun logWear(itemId: String) = runBusy {
+        require(items.any { it.id == itemId })
+        val s = currentSession()
+        val requestId = pendingWearRequests.getOrPut(itemId) { java.util.UUID.randomUUID().toString() }
+        api.recordWear(s.accessToken, itemId, requestId)
+        items = api.items(s.accessToken)
+        loadUtilities(s.accessToken)
+        pendingWearRequests.remove(itemId)
+        message = "Wear recorded"
+    }
+
+    fun renameUtility(table: String, id: String, title: String) = runBusy {
+        val s = currentSession()
+        api.renameUtility(s.accessToken, table, id, title)
+        loadUtilities(s.accessToken)
+        message = "Name updated"
+    }
+
+    fun deleteUtility(table: String, id: String) = runBusy {
+        val s = currentSession()
+        api.deleteUtility(s.accessToken, table, id)
+        loadUtilities(s.accessToken)
+        message = "Removed"
+    }
+
+    fun removeMember(table: String, parentId: String, itemId: String) = runBusy {
+        val s = currentSession()
+        api.removeMember(s.accessToken, table, parentId, itemId)
+        loadUtilities(s.accessToken)
+    }
+
+    fun planOutfit(outfitId: String, date: String, occasion: String) = runBusy {
+        val planned = java.time.LocalDate.parse(date.trim()).atStartOfDay(java.time.ZoneId.systemDefault()).toInstant()
+        require(utilityData["outfits"].orEmpty().any { it.optString("id") == outfitId }) { "Choose a saved outfit" }
+        val s = currentSession()
+        api.addUtility(s.accessToken, "outfit_plans", JSONObject().put("user_id", s.userId)
+            .put("outfit_id", outfitId).put("planned_for", planned.toString()).put("occasion", occasion.trim()))
+        loadUtilities(s.accessToken)
+        message = "Outfit planned"
+    }
+
+    fun updateItem(itemId: String, name: String, status: String) = runBusy {
+        val s = currentSession()
+        api.updateItem(s.accessToken, itemId, name, status)
+        items = api.items(s.accessToken)
+        searchResults = null
+        message = "Item updated"
+    }
+
+    fun savePreset(name: String, filters: FilterSelection) = runBusy {
+        require(name.trim().length in 1..80) { "Use a preset name between 1 and 80 characters" }
+        val s = currentSession()
+        val body = JSONObject().put("user_id", s.userId).put("name", name.trim()).put("filters", JSONObject()
+            .put("brands", JSONArray(filters.brands.toList())).put("colors", JSONArray(filters.colors.toList()))
+            .put("categories", JSONArray(filters.categories.toList())).put("product_types", JSONArray(filters.productTypes.toList())))
+        api.addUtility(s.accessToken, "wardrobe_filter_presets", body)
+        loadUtilities(s.accessToken)
+        message = "Filter preset saved"
+    }
+
     private var realtimeSocket: WebSocket? = null
     private var heartbeatJob: Job? = null
     private var realtimeRefreshJob: Job? = null
 
     init {
         if (session?.isUsable == true) {
-            viewModelScope.launch { bootstrapAndRefresh() }
+            runBusy { bootstrapAndRefresh() }
         }
     }
 
@@ -70,16 +175,18 @@ class ClosetViewModel(application: Application) : AndroidViewModel(application) 
     fun consumeExternalUrl() { pendingExternalUrl = null }
     fun consumeExport() { pendingExport = null }
 
-    private suspend fun currentSession(): Session {
+    private suspend fun currentSession(): Session = withContext(Dispatchers.Main.immediate) { sessionMutex.withLock {
         var s = session ?: error("Please sign in")
         val now = System.currentTimeMillis() / 1000
         if (s.expiresAtEpochSeconds <= now + 120 && s.refreshToken.isNotBlank()) {
             s = api.refresh(s.refreshToken)
+            coroutineContext.ensureActive()
             secureStore.save(s)
             session = s
+            startRealtime(s)
         }
-        return s
-    }
+        s
+    } }
 
     fun signIn(email: String, password: String) {
         runBusy {
@@ -118,19 +225,35 @@ class ClosetViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun signOut() {
+        val previousToken = session?.accessToken
+        viewModelScope.coroutineContext.cancelChildren()
         realtimeSocket?.cancel()
         heartbeatJob?.cancel()
+        realtimeRefreshJob?.cancel()
         realtimeSocket = null
         session = null
         items = emptyList()
         searchResults = null
         stylistResponse = null
+        pendingWearRequests.clear()
+        utilityData = emptyMap()
+        preferences = UserPreferencesAndroid()
+        driveStatus = DriveStatus(false, false, null)
+        driveFiles = emptyList()
+        pendingExport = null
+        pendingExternalUrl = null
+        searchInterpretation = ""
+        message = null
+        busy = false
+        importDone = 0
+        importTotal = 0
         secureStore.clear()
+        if (previousToken != null) viewModelScope.launch { runCatching { api.signOut(previousToken) } }
     }
 
     private suspend fun bootstrapAndRefresh() {
         val s = currentSession()
-        runCatching { api.bootstrap(s.accessToken) }
+        api.bootstrap(s.accessToken)
         supervisorScope {
             val wardrobe = async { api.items(s.accessToken) }
             val prefs = async { api.preferences(s.accessToken, s.userId) }
@@ -175,31 +298,33 @@ class ClosetViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun importUris(uris: List<Uri>) {
-        if (uris.isEmpty()) return
+        if (uris.isEmpty() || busy) return
         viewModelScope.launch {
             busy = true
             importDone = 0
             importTotal = uris.size
+            var failures = 0
             try {
-                val s = currentSession()
                 val context = getApplication<Application>()
-                for (chunk in uris.chunked(4)) {
+                for (chunk in uris.chunked(2)) {
                     supervisorScope {
                         chunk.map { uri ->
                             async(Dispatchers.IO) {
                                 val sanitized = ImageSanitizer.sanitize(context, uri)
-                                api.uploadSanitized(s, sanitized)
+                                api.uploadSanitized(currentSession(), sanitized)
                             }
                         }.forEach { deferred ->
                             runCatching { deferred.await() }
-                                .onFailure { message = it.message }
+                                .onFailure { if (it is CancellationException) throw it; failures += 1 }
                             importDone += 1
                         }
                     }
                 }
-                items = api.items(s.accessToken)
-                message = "Import finished: $importDone of $importTotal processed."
-            } catch (t: Throwable) {
+                items = api.items(currentSession().accessToken)
+                message = "Import finished: ${importDone - failures} succeeded, $failures failed."
+            } catch (t: CancellationException) {
+                throw t
+            } catch (t: Exception) {
                 message = t.message ?: "Import failed"
             } finally {
                 busy = false
@@ -215,9 +340,14 @@ class ClosetViewModel(application: Application) : AndroidViewModel(application) 
                 android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
             )
         }
-        val uris = ImageSanitizer.imageUrisInTree(context, tree, 1000)
-        if (uris.isEmpty()) message = "No supported images were found in that folder."
-        else importUris(uris)
+        viewModelScope.launch {
+            try {
+                val uris = withContext(Dispatchers.IO) { ImageSanitizer.imageUrisInTree(context, tree, 1000) }
+                if (uris.isEmpty()) message = "No supported images were found in that folder."
+                else importUris(uris)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { message = e.message ?: "Unable to read folder" }
+        }
     }
 
     fun importUrl(url: String) {
@@ -313,11 +443,14 @@ class ClosetViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun runBusy(block: suspend () -> Unit) {
+        if (busy) return
         viewModelScope.launch {
             busy = true
             try {
                 block()
-            } catch (t: Throwable) {
+            } catch (t: CancellationException) {
+                throw t
+            } catch (t: Exception) {
                 message = t.message ?: "Something went wrong"
             } finally {
                 busy = false
@@ -356,17 +489,18 @@ class ClosetViewModel(application: Application) : AndroidViewModel(application) 
                 val join = JSONObject()
                     .put("topic", "realtime:public:wardrobe_items")
                     .put("event", "phx_join")
-                    .put("payload", JSONObject().put("config", config))
+                    .put("payload", JSONObject().put("config", config).put("access_token", s.accessToken))
                     .put("ref", "1")
                 webSocket.send(join.toString())
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                if (text.contains("postgres_changes")) {
+                if (runCatching { JSONObject(text).optString("event") }.getOrNull() == "postgres_changes") {
                     realtimeRefreshJob?.cancel()
                     realtimeRefreshJob = viewModelScope.launch {
                         delay(350)
                         runCatching {
+                            if (session?.userId != s.userId) return@launch
                             val current = currentSession()
                             items = api.items(current.accessToken)
                         }
@@ -387,6 +521,11 @@ class ClosetViewModel(application: Application) : AndroidViewModel(application) 
                 realtimeSocket?.send(heartbeat.toString())
             }
         }
+    }
+
+    override fun onCleared() {
+        realtimeSocket?.cancel()
+        super.onCleared()
     }
 
     fun deviceId(context: Context): String =

@@ -6,6 +6,11 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -50,7 +55,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Divider
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -90,12 +95,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 private enum class AppTab(val title: String) {
-    Today("Today"), Closet("Closet"), Import("Import"), Stylist("Stylist"), Account("Account")
+    Today("Today"), Closet("Closet"), Import("Import"), Stylist("Stylist"), Account("Account"), Utilities("Utilities")
 }
 
 @Composable
 fun ClosetAndroidApp(vm: ClosetViewModel) {
-    val scheme = if (vm.preferences.theme == "dark") darkColorScheme() else lightColorScheme()
+    val scheme = if (vm.preferences.theme == "dark" || (vm.preferences.theme == "system" && isSystemInDarkTheme())) darkColorScheme() else lightColorScheme()
     MaterialTheme(colorScheme = scheme) {
         Surface(Modifier.fillMaxSize()) {
             if (vm.session?.isUsable == true) MainShell(vm) else AuthScreen(vm)
@@ -111,7 +116,7 @@ private fun AuthScreen(vm: ClosetViewModel) {
     var accepted by remember { mutableStateOf(false) }
 
     Column(
-        Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 56.dp),
+        Modifier.fillMaxSize().safeDrawingPadding().imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 28.dp, vertical = 32.dp),
         verticalArrangement = Arrangement.Center
     ) {
         Icon(Icons.Default.Checkroom, null, Modifier.size(54.dp))
@@ -130,6 +135,7 @@ private fun AuthScreen(vm: ClosetViewModel) {
             }
             Text("Passwords require at least 10 characters. Wardrobe images are stored privately per account.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        vm.message?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(vertical = 8.dp)) }
         Spacer(Modifier.height(18.dp))
         Button(
             onClick = { if (create) vm.signUp(email, password) else vm.signIn(email, password) },
@@ -196,6 +202,7 @@ private fun MainShell(vm: ClosetViewModel) {
                         AppTab.Import -> Icons.Default.AddPhotoAlternate
                         AppTab.Stylist -> Icons.Default.AutoAwesome
                         AppTab.Account -> Icons.Default.AccountCircle
+                        AppTab.Utilities -> Icons.Default.Checkroom
                     }
                     NavigationBarItem(tab == item, { tab = item }, { Icon(icon, item.title) }, label = { Text(item.title) })
                 }
@@ -209,6 +216,7 @@ private fun MainShell(vm: ClosetViewModel) {
                 AppTab.Import -> ImportScreen(vm)
                 AppTab.Stylist -> StylistScreen(vm)
                 AppTab.Account -> AccountScreen(vm)
+                AppTab.Utilities -> UtilitiesScreen(vm)
             }
             if (vm.busy) {
                 Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.10f)), contentAlignment = Alignment.Center) {
@@ -273,6 +281,8 @@ private fun ClosetScreen(vm: ClosetViewModel) {
     var aiQuery by remember { mutableStateOf("") }
     var selection by remember { mutableStateOf(FilterSelection()) }
     var showFilters by remember { mutableStateOf(false) }
+    var presetName by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) { vm.refreshUtilities() }
     val source = vm.searchResults ?: vm.items
     val filtered = source.filter { item ->
         val local = text.isBlank() || listOfNotNull(item.name, item.brand, item.category, item.productType, item.color, item.material, item.mood).any { it.contains(text, true) }
@@ -300,8 +310,20 @@ private fun ClosetScreen(vm: ClosetViewModel) {
             if (vm.searchResults != null) TextButton(vm::clearSearch) { Text("Clear AI results") }
         }
         if (vm.searchInterpretation.isNotBlank()) Text(vm.searchInterpretation, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            items(vm.utilityData["wardrobe_filter_presets"].orEmpty()) { preset ->
+                AssistChip({
+                    val f = preset.optJSONObject("filters") ?: org.json.JSONObject()
+                    selection = FilterSelection(f.optJSONArray("brands").toStringList().toSet(), f.optJSONArray("colors").toStringList().toSet(), f.optJSONArray("categories").toStringList().toSet(), f.optJSONArray("product_types").toStringList().toSet())
+                }, { Text(preset.optString("name")) })
+            }
+        }
+        if (selection.count > 0) Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(presetName, { presetName = it }, label = { Text("Preset name") }, modifier = Modifier.weight(1f))
+            TextButton({ vm.savePreset(presetName, selection) }, enabled = presetName.isNotBlank()) { Text("Save") }
+        }
         Text("${filtered.size} items", Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-        LazyVerticalGrid(GridCells.Adaptive(165.dp), verticalArrangement = Arrangement.spacedBy(10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxSize()) {
+        LazyVerticalGrid(GridCells.Adaptive(when (vm.preferences.gridDensity) { "compact" -> 130.dp; "gallery" -> 240.dp; else -> 165.dp }), verticalArrangement = Arrangement.spacedBy(10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxSize()) {
             gridItems(filtered, key = { it.id }) { WardrobeCard(vm, it) }
         }
     }
@@ -341,6 +363,19 @@ private fun toggle(set: Set<String>, value: String): Set<String> = if (value in 
 
 @Composable
 private fun WardrobeCard(vm: ClosetViewModel, item: WardrobeItem) {
+    var editing by remember { mutableStateOf(false) }
+    var itemName by remember(item.name) { mutableStateOf(item.name) }
+    var status by remember(item.status) { mutableStateOf(item.status) }
+    if (editing) AlertDialog(onDismissRequest = { editing = false }, title = { Text("Edit item") },
+        text = { Column {
+            OutlinedTextField(itemName, { itemName = it }, label = { Text("Name") })
+            Text("Status")
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(listOf("available", "laundry", "repair", "storage", "sold")) { value -> FilterChip(status == value, { status = value }, { Text(value.replaceFirstChar { it.uppercase() }) }) }
+            }
+        } },
+        confirmButton = { TextButton({ vm.updateItem(item.id, itemName, status); editing = false }, enabled = itemName.trim().length in 1..180 && !vm.busy) { Text("Save") } },
+        dismissButton = { TextButton({ editing = false }) { Text("Cancel") } })
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer), modifier = Modifier.fillMaxWidth()) {
         Box {
             if (item.storagePath != null) AuthenticatedImage(vm, item.storagePath, Modifier.fillMaxWidth().height(170.dp))
@@ -350,6 +385,8 @@ private fun WardrobeCard(vm: ClosetViewModel, item: WardrobeItem) {
             }
         }
         Column(Modifier.padding(11.dp)) {
+            TextButton({ vm.logWear(item.id) }, enabled = !vm.busy) { Text("Wore today") }
+            TextButton({ editing = true }, enabled = !vm.busy) { Text("Edit item") }
             Text(item.name, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(listOfNotNull(item.brand, item.color).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
             Text(listOfNotNull(item.productType ?: item.category, item.fit).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
@@ -382,13 +419,13 @@ private fun ImportScreen(vm: ClosetViewModel) {
         }
         if (vm.importTotal > 0) item { Text("Import progress: ${vm.importDone} / ${vm.importTotal}") }
         item {
-            Divider()
+            HorizontalDivider()
             Text("Secure HTTPS link", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             OutlinedTextField(link, { link = it }, label = { Text("https://…/clothing-image.jpg") }, modifier = Modifier.fillMaxWidth())
             Button({ vm.importUrl(link) }, enabled = link.startsWith("https://")) { Icon(Icons.Default.Link, null); Spacer(Modifier.width(5.dp)); Text("Import link through firewall") }
         }
         item {
-            Divider()
+            HorizontalDivider()
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Google Drive", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
