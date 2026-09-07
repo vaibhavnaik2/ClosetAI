@@ -1,0 +1,179 @@
+name: ClosetAI RC3 Universal DMG
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".release/rc3/**"
+      - ".github/workflows/closetai-rc3-universal-dmg.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_SHA256: d2fc651cd62ff000a398889d4a9b3defcdd387f2f9d9bd2c61a2841c6f75da27
+
+jobs:
+  build-arm64:
+    name: RC3 Apple Silicon
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct and verify RC3 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .release/rc3/part*.b64 | tr -d '\n\r' | base64 --decode > rc3.zip
+          echo "$SOURCE_SHA256  rc3.zip" | shasum -a 256 -c -
+          unzip -q rc3.zip
+          test -f ClosetAI_RC3/Package.swift
+          swiftc -parse ClosetAI_RC3/Sources/ClosetAICommercial/*.swift
+      - name: Build ARM64 release
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ClosetAI_RC3
+          swift --version
+          swift build -c release
+          mkdir -p ../binary
+          cp .build/release/ClosetAICommercial ../binary/ClosetAICommercial-arm64
+          file ../binary/ClosetAICommercial-arm64
+          lipo -archs ../binary/ClosetAICommercial-arm64 | grep -q arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClosetAI-RC3-arm64
+          path: binary/ClosetAICommercial-arm64
+          if-no-files-found: error
+
+  build-x86_64:
+    name: RC3 Intel
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct and verify RC3 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .release/rc3/part*.b64 | tr -d '\n\r' | base64 --decode > rc3.zip
+          echo "$SOURCE_SHA256  rc3.zip" | shasum -a 256 -c -
+          unzip -q rc3.zip
+          test -f ClosetAI_RC3/Package.swift
+          swiftc -parse ClosetAI_RC3/Sources/ClosetAICommercial/*.swift
+      - name: Build Intel release
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ClosetAI_RC3
+          swift --version
+          swift build -c release
+          mkdir -p ../binary
+          cp .build/release/ClosetAICommercial ../binary/ClosetAICommercial-x86_64
+          file ../binary/ClosetAICommercial-x86_64
+          lipo -archs ../binary/ClosetAICommercial-x86_64 | grep -q x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClosetAI-RC3-x86_64
+          path: binary/ClosetAICommercial-x86_64
+          if-no-files-found: error
+
+  package:
+    name: Package and smoke-test RC3
+    runs-on: macos-15
+    needs: [build-arm64, build-x86_64]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ClosetAI-RC3-arm64
+          path: bin/arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: ClosetAI-RC3-x86_64
+          path: bin/x86_64
+
+      - name: Assemble Universal 2 application
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="dist/ClosetAI.app"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+
+          lipo -create             bin/arm64/ClosetAICommercial-arm64             bin/x86_64/ClosetAICommercial-x86_64             -output "$APP/Contents/MacOS/ClosetAICommercial"
+
+          ARCHS="$(lipo -archs "$APP/Contents/MacOS/ClosetAICommercial")"
+          echo "Universal architectures: $ARCHS"
+          [[ "$ARCHS" == *"arm64"* && "$ARCHS" == *"x86_64"* ]]
+
+          cat > "$APP/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>ClosetAI</string>
+            <key>CFBundleDisplayName</key><string>ClosetAI</string>
+            <key>CFBundleIdentifier</key><string>com.closetai.app</string>
+            <key>CFBundleVersion</key><string>3</string>
+            <key>CFBundleShortVersionString</key><string>1.0.0-rc3</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleExecutable</key><string>ClosetAICommercial</string>
+            <key>LSMinimumSystemVersion</key><string>14.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+            <key>CFBundleURLTypes</key>
+            <array>
+              <dict>
+                <key>CFBundleURLName</key><string>com.closetai.oauth</string>
+                <key>CFBundleURLSchemes</key>
+                <array><string>closetai</string></array>
+              </dict>
+            </array>
+          </dict>
+          </plist>
+          PLIST
+
+          chmod +x "$APP/Contents/MacOS/ClosetAICommercial"
+          plutil -lint "$APP/Contents/Info.plist"
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          otool -L "$APP/Contents/MacOS/ClosetAICommercial" | tee /tmp/otool.txt
+
+      - name: Launch smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="dist/ClosetAI.app"
+          "$APP/Contents/MacOS/ClosetAICommercial" >/tmp/closetai-smoke.log 2>&1 &
+          PID=$!
+          sleep 6
+          if ! kill -0 "$PID" 2>/dev/null; then
+            echo "ClosetAI exited during launch smoke test"
+            cat /tmp/closetai-smoke.log || true
+            exit 1
+          fi
+          kill "$PID" || true
+          wait "$PID" || true
+          echo "Launch smoke test passed."
+
+      - name: Build and verify genuine DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dmg-stage
+          cp -R "dist/ClosetAI.app" "dmg-stage/ClosetAI.app"
+          ln -s /Applications "dmg-stage/Applications"
+
+          hdiutil create             -volname "ClosetAI"             -srcfolder "dmg-stage"             -ov             -format UDZO             "dist/ClosetAI-RC3-Universal.dmg"
+
+          hdiutil verify "dist/ClosetAI-RC3-Universal.dmg"
+          shasum -a 256 "dist/ClosetAI-RC3-Universal.dmg" > "dist/ClosetAI-RC3-Universal.dmg.sha256"
+          ditto -c -k --keepParent "dist/ClosetAI.app" "dist/ClosetAI-RC3-Universal-app.zip"
+          ls -lh dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClosetAI-RC3-macOS
+          path: |
+            dist/ClosetAI-RC3-Universal.dmg
+            dist/ClosetAI-RC3-Universal.dmg.sha256
+            dist/ClosetAI-RC3-Universal-app.zip
+          if-no-files-found: error
+          retention-days: 30
