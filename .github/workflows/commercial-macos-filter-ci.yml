@@ -1,0 +1,40 @@
+name: Commercial macOS Filter CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "commercial/macos/**"
+      - ".github/workflows/commercial-macos-filter-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ClosetAI commercial macOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd commercial/macos
+          swift --version
+          swift build -c release
+          file .build/release/ClosetAICommercial
+          mkdir -p ../../ci-output
+          cp .build/release/ClosetAICommercial ../../ci-output/ClosetAICommercial-${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClosetAICommercial-${{ matrix.arch }}
+          path: ci-output/ClosetAICommercial-${{ matrix.arch }}
+          if-no-files-found: error
