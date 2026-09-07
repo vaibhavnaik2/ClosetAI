@@ -1,0 +1,137 @@
+name: Build ClosetAI Pro Universal DMG
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".source/**"
+      - ".github/workflows/build-universal-dmg.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-arm64:
+    name: Build Apple Silicon
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct source
+        shell: bash
+        run: |
+          cat .source/part*.b64 | tr -d '\n\r' | base64 --decode > source.zip
+          mkdir source
+          unzip -q source.zip -d source
+          test -f source/Package.swift
+      - name: Build release
+        shell: bash
+        run: |
+          cd source
+          swift --version
+          swift build -c release
+          mkdir -p ../binary
+          cp .build/release/ClosetAIPro ../binary/ClosetAIPro-arm64
+          file ../binary/ClosetAIPro-arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClosetAIPro-arm64
+          path: binary/ClosetAIPro-arm64
+          if-no-files-found: error
+
+  build-x86_64:
+    name: Build Intel
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct source
+        shell: bash
+        run: |
+          cat .source/part*.b64 | tr -d '\n\r' | base64 --decode > source.zip
+          mkdir source
+          unzip -q source.zip -d source
+          test -f source/Package.swift
+      - name: Build release
+        shell: bash
+        run: |
+          cd source
+          swift --version
+          swift build -c release
+          mkdir -p ../binary
+          cp .build/release/ClosetAIPro ../binary/ClosetAIPro-x86_64
+          file ../binary/ClosetAIPro-x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClosetAIPro-x86_64
+          path: binary/ClosetAIPro-x86_64
+          if-no-files-found: error
+
+  package-dmg:
+    name: Create Universal 2 DMG
+    runs-on: macos-15
+    needs: [build-arm64, build-x86_64]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ClosetAIPro-arm64
+          path: binaries/arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: ClosetAIPro-x86_64
+          path: binaries/x86_64
+
+      - name: Assemble Universal 2 app
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="dist/ClosetAI Pro.app"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          lipo -create             binaries/arm64/ClosetAIPro-arm64             binaries/x86_64/ClosetAIPro-x86_64             -output "$APP/Contents/MacOS/ClosetAIPro"
+          lipo -info "$APP/Contents/MacOS/ClosetAIPro"
+
+          cat > "$APP/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>ClosetAI Pro</string>
+            <key>CFBundleDisplayName</key><string>ClosetAI Pro</string>
+            <key>CFBundleIdentifier</key><string>com.closetai.pro</string>
+            <key>CFBundleVersion</key><string>1</string>
+            <key>CFBundleShortVersionString</key><string>1.0.0</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleExecutable</key><string>ClosetAIPro</string>
+            <key>LSMinimumSystemVersion</key><string>14.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+
+          chmod +x "$APP/Contents/MacOS/ClosetAIPro"
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
+      - name: Create genuine UDIF DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="dmg-stage"
+          mkdir -p "$STAGE"
+          cp -R "dist/ClosetAI Pro.app" "$STAGE/ClosetAI Pro.app"
+          ln -s /Applications "$STAGE/Applications"
+
+          hdiutil create             -volname "ClosetAI Pro"             -srcfolder "$STAGE"             -ov             -format UDZO             "dist/ClosetAI-Pro-Universal.dmg"
+
+          hdiutil verify "dist/ClosetAI-Pro-Universal.dmg"
+          shasum -a 256 "dist/ClosetAI-Pro-Universal.dmg" > "dist/ClosetAI-Pro-Universal.dmg.sha256"
+          ls -lh dist/
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClosetAI-Pro-macOS
+          path: |
+            dist/ClosetAI-Pro-Universal.dmg
+            dist/ClosetAI-Pro-Universal.dmg.sha256
+          if-no-files-found: error
+          retention-days: 30
