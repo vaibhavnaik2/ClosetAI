@@ -12,3 +12,6 @@ artifacts/
 
 backend/reference/
 supabase/.temp/
+
+**/.build/
+macos/ClosetAI/
