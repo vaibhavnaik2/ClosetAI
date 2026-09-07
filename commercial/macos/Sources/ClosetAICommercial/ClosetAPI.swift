@@ -51,13 +51,14 @@ actor ClosetAPI {
     }
 
     func savePreset(name: String, filters: FilterState, naturalLanguageQuery: String?, userID: UUID, accessToken: String) async throws -> FilterPreset {
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "user_id": userID.uuidString,
             "name": name,
             "filters": filters.asPayload(),
-            "natural_language_query": naturalLanguageQuery as Any,
             "is_pinned": false
         ]
+        payload["natural_language_query"] = naturalLanguageQuery ?? NSNull()
+
         let body = try JSONSerialization.data(withJSONObject: payload)
         let req = try request(
             path: "/rest/v1/wardrobe_filter_presets?select=id,name,filters,natural_language_query,is_pinned,updated_at",
