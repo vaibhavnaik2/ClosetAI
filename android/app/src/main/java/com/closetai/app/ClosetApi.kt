@@ -405,13 +405,13 @@ class ClosetApi(private val baseUrl: String = ClosetConfig.baseUrl,
         execute(request("/functions/v1/delete-account", "POST", token, body.toString().toByteArray()))
     }
     suspend fun utilityRows(token: String, table: String): List<JSONObject> {
-        require(table in setOf("outfits", "wardrobe_collections", "packing_lists", "wear_events", "wardrobe_filter_presets", "packing_list_items", "wardrobe_collection_items"))
+        require(table in setOf("outfits", "wardrobe_collections", "packing_lists", "wear_events", "wardrobe_filter_presets", "packing_list_items", "wardrobe_collection_items", "outfit_plans"))
         val order = when (table) { "packing_list_items" -> "packing_list_id.asc,item_id.asc"; "wardrobe_collection_items" -> "collection_id.asc,item_id.asc"; else -> "id.asc" }
         return pagedRows(token, "/rest/v1/$table?select=*&order=$order")
     }
 
     suspend fun addUtility(token: String, table: String, body: JSONObject) {
-        require(table in setOf("wardrobe_collections", "packing_lists", "wear_events", "wardrobe_filter_presets", "packing_list_items", "wardrobe_collection_items"))
+        require(table in setOf("wardrobe_collections", "packing_lists", "wear_events", "wardrobe_filter_presets", "packing_list_items", "wardrobe_collection_items", "outfit_plans"))
         execute(request("/rest/v1/$table", "POST", token, body.toString().toByteArray()))
     }
 
@@ -419,6 +419,43 @@ class ClosetApi(private val baseUrl: String = ClosetConfig.baseUrl,
         UUID.fromString(listId); UUID.fromString(itemId)
         execute(request("/rest/v1/packing_list_items?packing_list_id=eq.$listId&item_id=eq.$itemId", "PATCH", token,
             JSONObject().put("packed", packed).toString().toByteArray()))
+    }
+
+    suspend fun recordWear(token: String, itemId: String, eventId: String) {
+        UUID.fromString(itemId); UUID.fromString(eventId)
+        val payload = JSONObject().put("p_item_id", itemId).put("p_event_id", eventId)
+        val result = execute(request("/rest/v1/rpc/record_item_worn", "POST", token, payload.toString().toByteArray()))
+        check(result.decodeToString().trim() == "true") { "Wear was not recorded. Refresh your wardrobe and retry." }
+    }
+
+    suspend fun renameUtility(token: String, table: String, id: String, title: String) {
+        val field = when (table) { "outfits", "packing_lists" -> "title"; "wardrobe_collections", "wardrobe_filter_presets" -> "name"; else -> error("Unsupported list") }
+        UUID.fromString(id)
+        require(title.trim().length in 1..80) { "Use a name between 1 and 80 characters" }
+        val result = execute(request("/rest/v1/$table?id=eq.$id", "PATCH", token,
+            JSONObject().put(field, title.trim()).toString().toByteArray(), extraHeaders = mapOf("Prefer" to "return=representation")))
+        check(JSONArray(result.decodeToString()).length() == 1) { "This list was not updated. Refresh and retry." }
+    }
+
+    suspend fun deleteUtility(token: String, table: String, id: String) {
+        require(table in setOf("outfits", "packing_lists", "wardrobe_collections", "wardrobe_filter_presets", "outfit_plans"))
+        UUID.fromString(id)
+        execute(request("/rest/v1/$table?id=eq.$id", "DELETE", token))
+    }
+
+    suspend fun removeMember(token: String, table: String, parentId: String, itemId: String) {
+        val field = when (table) { "packing_list_items" -> "packing_list_id"; "wardrobe_collection_items" -> "collection_id"; else -> error("Unsupported membership") }
+        UUID.fromString(parentId); UUID.fromString(itemId)
+        execute(request("/rest/v1/$table?$field=eq.$parentId&item_id=eq.$itemId", "DELETE", token))
+    }
+
+    suspend fun updateItem(token: String, itemId: String, name: String, status: String) {
+        UUID.fromString(itemId)
+        require(name.trim().length in 1..180) { "Use an item name between 1 and 180 characters" }
+        require(status in setOf("available", "laundry", "repair", "storage", "sold", "archived"))
+        val result = execute(request("/rest/v1/wardrobe_items?id=eq.$itemId", "PATCH", token,
+            JSONObject().put("name", name.trim()).put("status", status).toString().toByteArray(), extraHeaders = mapOf("Prefer" to "return=representation")))
+        check(JSONArray(result.decodeToString()).length() == 1) { "This item was not updated. Refresh and retry." }
     }
 
 }

@@ -363,6 +363,19 @@ private fun toggle(set: Set<String>, value: String): Set<String> = if (value in 
 
 @Composable
 private fun WardrobeCard(vm: ClosetViewModel, item: WardrobeItem) {
+    var editing by remember { mutableStateOf(false) }
+    var itemName by remember(item.name) { mutableStateOf(item.name) }
+    var status by remember(item.status) { mutableStateOf(item.status) }
+    if (editing) AlertDialog(onDismissRequest = { editing = false }, title = { Text("Edit item") },
+        text = { Column {
+            OutlinedTextField(itemName, { itemName = it }, label = { Text("Name") })
+            Text("Status")
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(listOf("available", "laundry", "repair", "storage", "sold")) { value -> FilterChip(status == value, { status = value }, { Text(value.replaceFirstChar { it.uppercase() }) }) }
+            }
+        } },
+        confirmButton = { TextButton({ vm.updateItem(item.id, itemName, status); editing = false }, enabled = itemName.trim().length in 1..180 && !vm.busy) { Text("Save") } },
+        dismissButton = { TextButton({ editing = false }) { Text("Cancel") } })
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer), modifier = Modifier.fillMaxWidth()) {
         Box {
             if (item.storagePath != null) AuthenticatedImage(vm, item.storagePath, Modifier.fillMaxWidth().height(170.dp))
@@ -372,7 +385,8 @@ private fun WardrobeCard(vm: ClosetViewModel, item: WardrobeItem) {
             }
         }
         Column(Modifier.padding(11.dp)) {
-            TextButton({ vm.logWear(item.id) }) { Text("Wore today") }
+            TextButton({ vm.logWear(item.id) }, enabled = !vm.busy) { Text("Wore today") }
+            TextButton({ editing = true }, enabled = !vm.busy) { Text("Edit item") }
             Text(item.name, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(listOfNotNull(item.brand, item.color).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
             Text(listOfNotNull(item.productType ?: item.category, item.fit).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)

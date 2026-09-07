@@ -45,4 +45,31 @@ class ApiContractTest {
             assertFalse(error.message!!.contains("secret-debug-value"))
         }
     }
+    @Test fun wearRequestCarriesStableIdempotencyKeyAndRejectsFalse() = runBlocking {
+        MockWebServer().use { server ->
+            val api = ClosetApi(server.url("/").toString().trimEnd('/'))
+            val item = "11111111-1111-4111-8111-111111111111"
+            val event = "22222222-2222-4222-8222-222222222222"
+            server.enqueue(MockResponse().setBody("true"))
+            api.recordWear("token", item, event)
+            val request = server.takeRequest()
+            assertEquals("/rest/v1/rpc/record_item_worn", request.path)
+            val body = org.json.JSONObject(request.body.readUtf8())
+            assertEquals(item, body.getString("p_item_id"))
+            assertEquals(event, body.getString("p_event_id"))
+            server.enqueue(MockResponse().setBody("false"))
+            assertThrows(IllegalStateException::class.java) { runBlocking { api.recordWear("token", item, event) } }
+            Unit
+        }
+    }
+
+    @Test fun missingItemUpdateIsNotReportedAsSuccess() {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("[]"))
+            assertThrows(IllegalStateException::class.java) {
+                runBlocking { ClosetApi(server.url("/").toString().trimEnd('/')).updateItem("token", "11111111-1111-4111-8111-111111111111", "Jacket", "laundry") }
+            }
+        }
+    }
+
 }

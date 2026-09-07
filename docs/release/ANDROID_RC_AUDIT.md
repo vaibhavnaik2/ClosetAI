@@ -30,12 +30,14 @@ Android targets API 36 using AGP 8.10.1, Gradle 8.11.1 and JDK 17. Google Play's
 
 ## Deployed backend fixes and evidence
 
-Four migration files match the live migration history:
+Five migration files match the live migration history:
 
 - `20260907080639_fix_duplicate_account_initialization`: two AFTER INSERT triggers previously collided on profile creation. The legacy initializer is now idempotent. Tests confirm profile/preferences/entitlement creation and preserved terms metadata.
 - `20260907080654_harden_rate_limit_counters`: client counter writes revoked; the compatible invoker RPC delegates to a private, narrowly granted definer function with fixed quotas/windows. Tests reject quota inflation, unknown buckets, direct counter reset and deletion.
 - `20260907081606_complete_account_export`: a STABLE invoker function exports a consistent RLS-scoped database snapshot without per-table REST row limits. Tests cover 1,001 items, packing and collection membership, cross-account isolation, and OAuth-token exclusion. The `account-export` endpoint now uses this function and fails explicitly on errors.
 - `20260907082028_protect_account_deletion`: a private deletion lock adds a restrictive storage policy during deletion and rejects deleted-user tokens. The `delete-account` endpoint checks listing/removal errors, verifies empty storage, revokes sessions and removes the account in sequence. Failures do not return success.
+
+- `20260907084002_wardrobe_reference_integrity`: restrictive reference checks prevent cross-account garments/outfits in wear, feedback, plans, outfits and import jobs. Atomic wear recording accepts an idempotency key and increments wear counts once. Rollback assertions pass after deployment.
 
 Database assertions were run before deployment inside rolled-back transactions and repeated after deployment. Nine Deno handler tests and type checks pass. Backend dependencies are version-pinned with a lockfile for CI.
 
@@ -58,9 +60,9 @@ The `.release` directory, existing macOS source and packaging workflows remain u
 3. Password-recovery completion and approved policy links; existing recovery UI only requests an email.
 4. AI model availability and real-garment classification/stylist acceptance tests; entitlement enforcement, server-side image/hash validation, prompt-injection tests and unavailable-garment exclusion. No claims of validated fashion accuracy.
 5. URL-import hardening: current endpoint still buffers the response before checking its actual size, has DNS/IPv6/rebinding gaps, and does not fully sanitize metadata. A secure egress path is required before claiming a production import firewall.
-6. Android utility edit/delete flows, outfit planning, full filter/customization parity, offline import queues and all privacy/auto-analysis preference enforcement remain incomplete.
+6. Full filter/customization parity, offline import queues and all privacy/auto-analysis preference enforcement remain incomplete. Utility rename/delete, member removal, outfit planning and item name/status edits have been added; authenticated device interaction coverage is still needed.
 7. Realtime reconnect/backoff and cross-account concurrency tests; stress testing of fixed quotas.
 8. Deletion must still be stress-tested with concurrent in-flight uploads and very large libraries. The synchronous cleanup rejects more than 50,000 objects or excessive nesting, requiring a background cleanup job. Exports contain database records and storage paths, not a ZIP of original photos.
-9. Test foreign-object references in wear events, outfit feedback and plans beyond simple `user_id` ownership. Full baseline backend migrations and all original Edge Functions still need to be brought under version control for a clean-room rebuild.
+9. Full baseline backend migrations and all original Edge Functions still need to be brought under version control for a clean-room rebuild.
 
 Retrieved legacy function snapshots under local `backend/reference/` are excluded from publication. They are review material, not hardened deployment sources.

@@ -64,11 +64,12 @@ class ClosetViewModel(application: Application) : AndroidViewModel(application) 
         private set
 
     private val sessionMutex = Mutex()
+    private val pendingWearRequests = mutableMapOf<String, String>()
     var utilityData by mutableStateOf<Map<String, List<JSONObject>>>(emptyMap())
         private set
 
     private suspend fun loadUtilities(token: String) {
-        val tables = listOf("outfits", "wardrobe_collections", "packing_lists", "wear_events", "wardrobe_filter_presets", "packing_list_items", "wardrobe_collection_items")
+        val tables = listOf("outfits", "wardrobe_collections", "packing_lists", "wear_events", "wardrobe_filter_presets", "packing_list_items", "wardrobe_collection_items", "outfit_plans")
         utilityData = supervisorScope {
             tables.map { table -> async { table to api.utilityRows(token, table) } }.map { it.await() }.toMap()
         }
@@ -103,10 +104,50 @@ class ClosetViewModel(application: Application) : AndroidViewModel(application) 
     fun logWear(itemId: String) = runBusy {
         require(items.any { it.id == itemId })
         val s = currentSession()
-        api.addUtility(s.accessToken, "wear_events", JSONObject().put("user_id", s.userId).put("item_id", itemId))
+        val requestId = pendingWearRequests.getOrPut(itemId) { java.util.UUID.randomUUID().toString() }
+        api.recordWear(s.accessToken, itemId, requestId)
         items = api.items(s.accessToken)
         loadUtilities(s.accessToken)
+        pendingWearRequests.remove(itemId)
         message = "Wear recorded"
+    }
+
+    fun renameUtility(table: String, id: String, title: String) = runBusy {
+        val s = currentSession()
+        api.renameUtility(s.accessToken, table, id, title)
+        loadUtilities(s.accessToken)
+        message = "Name updated"
+    }
+
+    fun deleteUtility(table: String, id: String) = runBusy {
+        val s = currentSession()
+        api.deleteUtility(s.accessToken, table, id)
+        loadUtilities(s.accessToken)
+        message = "Removed"
+    }
+
+    fun removeMember(table: String, parentId: String, itemId: String) = runBusy {
+        val s = currentSession()
+        api.removeMember(s.accessToken, table, parentId, itemId)
+        loadUtilities(s.accessToken)
+    }
+
+    fun planOutfit(outfitId: String, date: String, occasion: String) = runBusy {
+        val planned = java.time.LocalDate.parse(date.trim()).atStartOfDay(java.time.ZoneId.systemDefault()).toInstant()
+        require(utilityData["outfits"].orEmpty().any { it.optString("id") == outfitId }) { "Choose a saved outfit" }
+        val s = currentSession()
+        api.addUtility(s.accessToken, "outfit_plans", JSONObject().put("user_id", s.userId)
+            .put("outfit_id", outfitId).put("planned_for", planned.toString()).put("occasion", occasion.trim()))
+        loadUtilities(s.accessToken)
+        message = "Outfit planned"
+    }
+
+    fun updateItem(itemId: String, name: String, status: String) = runBusy {
+        val s = currentSession()
+        api.updateItem(s.accessToken, itemId, name, status)
+        items = api.items(s.accessToken)
+        searchResults = null
+        message = "Item updated"
     }
 
     fun savePreset(name: String, filters: FilterSelection) = runBusy {
@@ -194,6 +235,7 @@ class ClosetViewModel(application: Application) : AndroidViewModel(application) 
         items = emptyList()
         searchResults = null
         stylistResponse = null
+        pendingWearRequests.clear()
         utilityData = emptyMap()
         preferences = UserPreferencesAndroid()
         driveStatus = DriveStatus(false, false, null)

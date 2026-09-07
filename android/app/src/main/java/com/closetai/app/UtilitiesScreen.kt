@@ -14,8 +14,32 @@ fun UtilitiesScreen(vm: ClosetViewModel) {
     var table by remember { mutableStateOf("outfits") }
     var name by remember { mutableStateOf("") }
     var selected by remember { mutableStateOf<String?>(null) }
+    var editing by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var deleting by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var planning by remember { mutableStateOf<String?>(null) }
+    var draft by remember { mutableStateOf("") }
+    var date by remember { mutableStateOf(java.time.LocalDate.now().toString()) }
+    var occasion by remember { mutableStateOf("") }
+    editing?.let { (kind, id) ->
+        AlertDialog(onDismissRequest = { editing = null }, title = { Text("Rename") },
+            text = { OutlinedTextField(draft, { draft = it }, label = { Text("Name") }) },
+            confirmButton = { TextButton({ vm.renameUtility(kind, id, draft); editing = null }, enabled = draft.trim().length in 1..80 && !vm.busy) { Text("Save") } },
+            dismissButton = { TextButton({ editing = null }) { Text("Cancel") } })
+    }
+    deleting?.let { (kind, id) ->
+        AlertDialog(onDismissRequest = { deleting = null }, title = { Text("Delete this entry?") },
+            text = { Text("This removes the saved entry. Your wardrobe images remain in your closet.") },
+            confirmButton = { TextButton({ vm.deleteUtility(kind, id); deleting = null; selected = null }, enabled = !vm.busy) { Text("Delete") } },
+            dismissButton = { TextButton({ deleting = null }) { Text("Cancel") } })
+    }
+    planning?.let { id ->
+        AlertDialog(onDismissRequest = { planning = null }, title = { Text("Plan this look") },
+            text = { Column { OutlinedTextField(date, { date = it }, label = { Text("Date (YYYY-MM-DD)") }); OutlinedTextField(occasion, { occasion = it }, label = { Text("Occasion") }) } },
+            confirmButton = { TextButton({ vm.planOutfit(id, date, occasion); planning = null }, enabled = runCatching { java.time.LocalDate.parse(date) }.isSuccess && !vm.busy) { Text("Plan") } },
+            dismissButton = { TextButton({ planning = null }) { Text("Cancel") } })
+    }
     LaunchedEffect(Unit) { vm.refreshUtilities() }
-    val tabs = listOf("outfits" to "Looks", "wardrobe_collections" to "Collections", "packing_lists" to "Packing", "wear_events" to "Wear history")
+    val tabs = listOf("outfits" to "Looks", "wardrobe_collections" to "Collections", "packing_lists" to "Packing", "wear_events" to "Wear history", "outfit_plans" to "Calendar", "wardrobe_filter_presets" to "Presets")
     val childTable = if (table == "packing_lists") "packing_list_items" else "wardrobe_collection_items"
     val parentKey = if (table == "packing_lists") "packing_list_id" else "collection_id"
     val members = vm.utilityData[childTable].orEmpty().filter { it.optString(parentKey) == selected }
@@ -34,7 +58,8 @@ fun UtilitiesScreen(vm: ClosetViewModel) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     val title = when (table) {
                         "wear_events" -> (vm.items.firstOrNull { it.id == row.optString("item_id") }?.name ?: "Wardrobe item") + " · " + row.optString("worn_at").take(10)
-                        "wardrobe_collections" -> row.optString("name")
+                        "wardrobe_collections", "wardrobe_filter_presets" -> row.optString("name")
+                        "outfit_plans" -> (vm.utilityData["outfits"].orEmpty().firstOrNull { it.optString("id") == row.optString("outfit_id") }?.optString("title") ?: "Planned look") + " · " + runCatching { java.time.OffsetDateTime.parse(row.optString("planned_for")).atZoneSameInstant(java.time.ZoneId.systemDefault()).toLocalDate().toString() }.getOrDefault(row.optString("planned_for").take(10))
                         else -> row.optString("title")
                     }
                     Text(title, style = MaterialTheme.typography.titleMedium)
@@ -42,6 +67,12 @@ fun UtilitiesScreen(vm: ClosetViewModel) {
                         Text(row.optString("rationale"))
                         Text(row.optJSONArray("item_ids").toStringList().mapNotNull { id -> vm.items.firstOrNull { it.id == id }?.name }.joinToString(" · "))
                     }
+                    if (table != "wear_events") Row {
+                        if (table != "outfit_plans") TextButton({ draft = title; editing = table to row.optString("id") }, enabled = !vm.busy) { Text("Rename") }
+                        TextButton({ deleting = table to row.optString("id") }, enabled = !vm.busy) { Text("Delete") }
+                        if (table == "outfits") TextButton({ planning = row.optString("id") }, enabled = !vm.busy) { Text("Plan") }
+                    }
+                    if (table == "outfit_plans") Text(row.optString("occasion"))
                     if (table in setOf("wardrobe_collections", "packing_lists")) TextButton({ selected = row.optString("id") }) { Text("Manage items") }
                 }
             }
@@ -55,6 +86,7 @@ fun UtilitiesScreen(vm: ClosetViewModel) {
                     if (member == null) TextButton({ vm.addToUtility(childTable, selected!!, item.id) }, enabled = !vm.busy) { Text("Add") }
                     else if (table == "packing_lists") FilterChip(member.optBoolean("packed"), { vm.setPacked(selected!!, item.id, !member.optBoolean("packed")) }, { Text(if (member.optBoolean("packed")) "Packed" else "To pack") })
                     else Text("Added")
+                    if (member != null) TextButton({ vm.removeMember(childTable, selected!!, item.id) }, enabled = !vm.busy) { Text("Remove") }
                 }
             }
         }
