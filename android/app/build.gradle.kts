@@ -6,12 +6,12 @@ plugins {
 
 android {
     namespace = "com.closetai.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.closetai.app"
         minSdk = 28
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 3
         versionName = "1.0.0-rc3"
 
