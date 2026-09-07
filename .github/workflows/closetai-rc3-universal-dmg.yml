@@ -29,6 +29,7 @@ jobs:
           unzip -q rc3.zip
           test -f ClosetAI_RC3/Package.swift
           cp .release/rc3-overrides/*.swift ClosetAI_RC3/Sources/ClosetAICommercial/
+          cp .release/rc3/overrides/CustomizeView.swift ClosetAI_RC3/Sources/ClosetAICommercial/CustomizeView.swift
           swiftc -parse ClosetAI_RC3/Sources/ClosetAICommercial/*.swift
       - name: Build ARM64 release
         shell: bash
@@ -61,6 +62,7 @@ jobs:
           unzip -q rc3.zip
           test -f ClosetAI_RC3/Package.swift
           cp .release/rc3-overrides/*.swift ClosetAI_RC3/Sources/ClosetAICommercial/
+          cp .release/rc3/overrides/CustomizeView.swift ClosetAI_RC3/Sources/ClosetAICommercial/CustomizeView.swift
           swiftc -parse ClosetAI_RC3/Sources/ClosetAICommercial/*.swift
       - name: Build Intel release
         shell: bash
