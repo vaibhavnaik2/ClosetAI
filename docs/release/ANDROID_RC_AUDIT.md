@@ -4,14 +4,14 @@ Baseline: `1f36139` in `vaibhavnaik2/ClosetAI`. Draft PR: https://github.com/vai
 
 ## Verified Android packages
 
-Android source commit: `c59d09936cdf52c90c494d9335354dda44d517ad`.
-GitHub CI run: https://github.com/vaibhavnaik2/ClosetAI/actions/runs/34099141729 . Build/test/lint and Android 16 emulator installation, launch, sign-in screen detection, restart and crash-buffer checks passed. Seven local Robolectric/API tests also passed. These are smoke/regression tests, not complete end-to-end UI coverage.
+Android source commit: `9c0271189c0f4ed07157e7fe1f790d41be2639be`.
+GitHub CI run: https://github.com/vaibhavnaik2/ClosetAI/actions/runs/34102854923 . Build/test/lint and Android 16 emulator installation, launch, sign-in screen detection, restart and crash-buffer checks passed. Nine local Robolectric/API tests also passed. These are smoke/regression tests, not complete end-to-end UI coverage.
 
 Downloaded CI artifact archive SHA-256 independently verified:
-`78ff344b838d50429352c578dc35c96f2c953ab479902f18781cf30859937147`.
+`02b01916c85f65cdbf5807f45f5825449dd878b25c536596b410da99eca6519f`.
 
-- Debug APK: `4d361bcd00dcaa8b03a81c4193abe019d08406df08774910b9f1993e5ff552c8`
-- Unsigned release AAB: `8dc0c0a7677e9ce530d72702e39a24b1d85809060deebf843701ba9be4465e40`
+- Debug APK: `06bca70aa2664fe4c7400c59dcc87d0aa04703b5952c5f4db2d97bc468727c45`
+- Unsigned release AAB: `c965b860715c379b004ecee04c21264e4687e676d5d438704177954c25c886d9`
 
 Both package checksums match the CI manifest. APK signature, ZIP integrity, 16 KB ZIP alignment and bundletool AAB validation pass. A ZIP-alignment check alone does not establish native-library ELF compatibility on every device.
 
