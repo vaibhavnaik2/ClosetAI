@@ -1,0 +1,18 @@
+{
+  "checks": [
+    "Password sign-in",
+    "Authenticated bootstrap",
+    "Private image upload",
+    "Wardrobe save",
+    "Collection create",
+    "Collection membership",
+    "Packing create",
+    "Packing membership",
+    "Live account export",
+    "Export contents and memberships",
+    "Live disposable-account deletion",
+    "Old token cannot read deleted storage",
+    "Refresh token revoked"
+  ],
+  "passed": 13
+}

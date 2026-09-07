@@ -1,0 +1,21 @@
+name: Backend privacy regression checks
+on:
+  push:
+    branches: [main, 'codex/android-*']
+    paths: ['supabase/**', '.github/workflows/backend-ci.yml']
+  pull_request:
+    paths: ['supabase/**', '.github/workflows/backend-ci.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - run: deno task --config supabase/functions/deno.json check
+      - run: deno task --config supabase/functions/deno.json test

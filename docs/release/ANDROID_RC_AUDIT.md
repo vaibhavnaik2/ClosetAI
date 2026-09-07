@@ -1,48 +1,66 @@
-# Android release engineering audit — 2026-09-07
+# ClosetAI Android release engineering — 2026-09-07
 
-Baseline: `1f36139` on `vaibhavnaik2/ClosetAI`. Changes are isolated to the Android branch. Two database fixes have been deployed and re-tested: duplicate account initialization and server-controlled rate limits. Edge Functions have not been changed.
+Baseline: `1f36139` in `vaibhavnaik2/ClosetAI`. Draft PR: https://github.com/vaibhavnaik2/ClosetAI/pull/1 . Android builds are development release candidates, not store-signed commercial releases.
+
+## Verified Android packages
+
+Android source commit: `c59d09936cdf52c90c494d9335354dda44d517ad`.
+GitHub CI run: https://github.com/vaibhavnaik2/ClosetAI/actions/runs/34099141729 . Build/test/lint and Android 16 emulator installation, launch, sign-in screen detection, restart and crash-buffer checks passed. Seven local Robolectric/API tests also passed. These are smoke/regression tests, not complete end-to-end UI coverage.
+
+Downloaded CI artifact archive SHA-256 independently verified:
+`78ff344b838d50429352c578dc35c96f2c953ab479902f18781cf30859937147`.
+
+- Debug APK: `4d361bcd00dcaa8b03a81c4193abe019d08406df08774910b9f1993e5ff552c8`
+- Unsigned release AAB: `8dc0c0a7677e9ce530d72702e39a24b1d85809060deebf843701ba9be4465e40`
+
+Both package checksums match the CI manifest. APK signature, ZIP integrity, 16 KB ZIP alignment and bundletool AAB validation pass. A ZIP-alignment check alone does not establish native-library ELF compatibility on every device.
+
+Android targets API 36 using AGP 8.10.1, Gradle 8.11.1 and JDK 17. Google Play's current requirement: https://developer.android.com/google/play/requirements/target-sdk . The Gradle distribution checksum is pinned. No release signing key has been generated or committed.
+
+## Android improvements
+
+- Missing launcher activity and warm-intent handling added.
+- Checksummed Gradle wrapper and independent build/test/lint/device workflow.
+- Bounded image streams and dimensions before bitmap allocation; sampled decoding; bounded folder traversal off the UI thread.
+- Cancellable HTTP calls, bounded response reads, and generic errors that exclude backend response bodies.
+- Serialized token refresh on the main dispatcher; cancellation propagation; account-state cleanup; server sign-out attempt; realtime token payload and structured event matching.
+- Visible auth errors; scrollable login; system theme; responsive grid density.
+- Cloud-backed saved looks, collections/membership, packing membership/packed state, wear logging/history, and filter presets.
+- Paginated wardrobe and utility reads. Empty preference updates fail rather than claiming a save.
+
+## Deployed backend fixes and evidence
+
+Four migration files match the live migration history:
+
+- `20260907080639_fix_duplicate_account_initialization`: two AFTER INSERT triggers previously collided on profile creation. The legacy initializer is now idempotent. Tests confirm profile/preferences/entitlement creation and preserved terms metadata.
+- `20260907080654_harden_rate_limit_counters`: client counter writes revoked; the compatible invoker RPC delegates to a private, narrowly granted definer function with fixed quotas/windows. Tests reject quota inflation, unknown buckets, direct counter reset and deletion.
+- `20260907081606_complete_account_export`: a STABLE invoker function exports a consistent RLS-scoped database snapshot without per-table REST row limits. Tests cover 1,001 items, packing and collection membership, cross-account isolation, and OAuth-token exclusion. The `account-export` endpoint now uses this function and fails explicitly on errors.
+- `20260907082028_protect_account_deletion`: a private deletion lock adds a restrictive storage policy during deletion and rejects deleted-user tokens. The `delete-account` endpoint checks listing/removal errors, verifies empty storage, revokes sessions and removes the account in sequence. Failures do not return success.
+
+Database assertions were run before deployment inside rolled-back transactions and repeated after deployment. Nine Deno handler tests and type checks pass. Backend dependencies are version-pinned with a lockfile for CI.
+
+A disposable live account passed 13 HTTP checks: password sign-in, bootstrap, private upload, wardrobe save, collection and packing creation/membership, complete export, deletion, old-token storage denial and refresh-token rejection. A follow-up database query confirmed zero remaining users, storage objects, sessions or deletion locks for that fixture. No real user account was used and no emails were sent.
+
+The security advisor reports one expected informational notice: RLS enabled with no policy on `private.closetai_account_deletions`. This is deliberately client-inaccessible and deny-by-default, with table grants revoked; narrowly scoped definer functions own access. Explanation: https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy . No warning/error-level advisor findings were returned. Advisors do not establish overall application security.
 
 ## macOS preservation
 
-The latest successful RC3 Actions run is https://github.com/vaibhavnaik2/ClosetAI/actions/runs/34076805288 at commit `6509255b6a1db062f9fba32479a1bca93a61b7fe`.
-The embedded RC3 ZIP has been independently reconstructed, ZIP integrity checked, and SHA-256 verified as `d2fc651cd62ff000a398889d4a9b3defcdd387f2f9d9bd2c61a2841c6f75da27`.
-The `.release` directory and existing macOS workflows are unchanged. The existing build reconstructs the archive and applies overrides before building each architecture. Reproducible source does not imply byte-identical signed DMGs on different runner images. Original release remains ad-hoc signed, not Developer ID notarized.
+Successful RC3 Actions run: https://github.com/vaibhavnaik2/ClosetAI/actions/runs/34076805288 at commit `6509255b6a1db062f9fba32479a1bca93a61b7fe`.
+The embedded ZIP was independently reconstructed and checked for ZIP integrity and SHA-256:
+`d2fc651cd62ff000a398889d4a9b3defcdd387f2f9d9bd2c61a2841c6f75da27`.
 
-## Android changes
+The `.release` directory, existing macOS source and packaging workflows remain unchanged. The build reconstructs the archive and applies overrides before compiling each architecture. Reproducible source does not imply byte-identical signed DMGs across changing runner images. The existing release is ad-hoc signed, not Developer ID notarized. Shared backend fixes preserve the existing RPC and endpoint signatures.
 
-- Added the missing launcher activity and warm-intent handling.
-- Added a checksummed Gradle wrapper and independent build/test/lint workflow.
-- Bounded input streams and image dimensions before bitmap allocation; sampled image decoding; bounded folder traversal off the UI thread.
-- Cancellable HTTP calls, bounded response reads, and generic errors that do not expose backend response bodies.
-- Serialized refresh token exchange; cancellation propagation; account-scoped state cleanup; realtime token payload and structured event matching.
-- Visible authentication errors; scrollable login; system theme support; responsive grid density.
-- Added cloud-backed saved looks, collections and membership, packing membership and packed state, wear logging/history, and saved filter presets.
-- Paginated wardrobe and utility reads. Empty preference updates fail instead of claiming a save.
+## Remaining commercial-release gates
 
-## Live backend findings requiring release gates
+1. Owner-controlled Android upload/signing key and Play Console setup; store listing, approved terms/privacy documents, Google Play declarations and physical-device testing.
+2. Google Drive OAuth credentials, redirect setup, connection/import/revocation acceptance tests. Current Drive functionality has not been verified with an owner's Drive account.
+3. Password-recovery completion and approved policy links; existing recovery UI only requests an email.
+4. AI model availability and real-garment classification/stylist acceptance tests; entitlement enforcement, server-side image/hash validation, prompt-injection tests and unavailable-garment exclusion. No claims of validated fashion accuracy.
+5. URL-import hardening: current endpoint still buffers the response before checking its actual size, has DNS/IPv6/rebinding gaps, and does not fully sanitize metadata. A secure egress path is required before claiming a production import firewall.
+6. Android utility edit/delete flows, outfit planning, full filter/customization parity, offline import queues and all privacy/auto-analysis preference enforcement remain incomplete.
+7. Realtime reconnect/backoff and cross-account concurrency tests; stress testing of fixed quotas.
+8. Deletion must still be stress-tested with concurrent in-flight uploads and very large libraries. The synchronous cleanup rejects more than 50,000 objects or excessive nesting, requiring a background cleanup job. Exports contain database records and storage paths, not a ZIP of original photos.
+9. Test foreign-object references in wear events, outfit feedback and plans beyond simple `user_id` ownership. Full baseline backend migrations and all original Edge Functions still need to be brought under version control for a clean-room rebuild.
 
-The connected project is healthy. Supabase security advisor returned no notices; this is not a complete security certification. All public tables inspected have RLS enabled.
-
-1. **Rate-limit bypass fixed:** counter writes are revoked for client roles. The compatible invoker RPC calls a private, narrowly granted definer function with fixed quotas and window. Live rollback-only regression tests confirm limits cannot be raised and counters cannot be reset/deleted. Unknown buckets are rejected. Parallel-load stress testing remains outstanding.
-2. **Incomplete export:** deployed `account-export` silently skips query failures, uses non-paginated reads, and omits collection/packing membership and import assets. Export must fail on unexpected errors and include all relevant rows with stable pagination.
-3. **Deletion errors:** deployed `delete-account` ignores storage listing/removal errors. It must stop and report failure, revoke sessions, and verify complete storage/account removal. Test with a disposable account, including storage failures and concurrent uploads.
-4. **Link ingestion:** URL import reads the whole response before checking actual byte size. DNS checks have gaps (including IPv6 literals and DNS rebinding); MIME/signatures alone do not sanitize metadata. Require bounded streaming and an egress policy enforcing the resolved destination at connection time.
-5. **Authentication:** duplicate account-creation triggers were discovered by live fixture testing and fixed with idempotent initialization. Post-deployment tests confirm one profile/preferences/entitlement record and preserved terms metadata. Password recovery currently requests an email but has no complete in-app recovery/password update route. Terms/privacy text needs actual approved policy documents and links. Production OAuth credentials and redirect configuration need verification.
-6. **Feature completeness:** utility screens support initial creation and membership but do not yet include edit/delete flows, outfit scheduling, full filtering parity, offline retry queues, and all macOS customization options. Automatic analysis/privacy preferences need server enforcement, not only saved settings.
-7. **Realtime:** needs reconnect/backoff and lifecycle tests, token expiration tests, and cross-account concurrency tests.
-8. **AI:** deployed functions use unpinned major Supabase imports; verify configured model availability and real image/stylist responses. Uploaded hashes are trusted when syntactically valid. Validate bytes server-side, enforce entitlements, and test prompt injection and unavailable garment exclusion.
-9. **Authorization relationships:** test that wear/outfit feedback/plan references cannot reference another user's objects, beyond simple `user_id` ownership.
-
-`backend/reference/` contains retrieved function source for review and reproducibility work. It is a snapshot, not a new deployment, and must not be deployed as a claimed hardened backend.
-
-## Distribution gates
-
-The debug APK uses a development certificate. The release AAB is unsigned until an owner-controlled upload key is configured. Never commit signing keys, passwords, service role keys, OAuth secrets, or user sessions. Production readiness additionally requires physical-device/emulator end-to-end tests, store signing and policy review, and the backend fixes above.
-
-## Verified build evidence
-
-Seven local Robolectric/API tests, debug/release builds and lint pass with API 36 and Android Gradle Plugin 8.10.1. API 35 CI runs `34093094932` and `34093836338` passed; CI emulator launch/restart at commit `fe2256a0` also passed in runs `34097311081` and `34097306828`. Latest API 36 CI results will be recorded after the final run. Debug APK signature verification and AAB bundletool validation pass.
-
-Android 16 target is required for new phone app submissions since August 31, 2026: https://developer.android.com/google/play/requirements/target-sdk .
-
-Migrations `20260907080639_fix_duplicate_account_initialization` and `20260907080654_harden_rate_limit_counters` match the live migration history. Their assertions were tested before deployment in a rolled-back transaction, then repeated against the deployed functions. Security advisors returned zero notices after deployment.
+Retrieved legacy function snapshots under local `backend/reference/` are excluded from publication. They are review material, not hardened deployment sources.
