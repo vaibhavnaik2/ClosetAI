@@ -1,0 +1,40 @@
+# Android release engineering audit — 2026-09-07
+
+Baseline: `1f36139` on `vaibhavnaik2/ClosetAI`. Changes are isolated to the Android branch. No production database or Edge Function deployments have been made by this audit.
+
+## macOS preservation
+
+The latest successful RC3 Actions run is https://github.com/vaibhavnaik2/ClosetAI/actions/runs/34076805288 at commit `6509255b6a1db062f9fba32479a1bca93a61b7fe`.
+The embedded RC3 ZIP has been independently reconstructed, ZIP integrity checked, and SHA-256 verified as `d2fc651cd62ff000a398889d4a9b3defcdd387f2f9d9bd2c61a2841c6f75da27`.
+The `.release` directory and existing macOS workflows are unchanged. The existing build reconstructs the archive and applies overrides before building each architecture. Reproducible source does not imply byte-identical signed DMGs on different runner images. Original release remains ad-hoc signed, not Developer ID notarized.
+
+## Android changes
+
+- Added the missing launcher activity and warm-intent handling.
+- Added a checksummed Gradle wrapper and independent build/test/lint workflow.
+- Bounded input streams and image dimensions before bitmap allocation; sampled image decoding; bounded folder traversal off the UI thread.
+- Cancellable HTTP calls, bounded response reads, and generic errors that do not expose backend response bodies.
+- Serialized refresh token exchange; cancellation propagation; account-scoped state cleanup; realtime token payload and structured event matching.
+- Visible authentication errors; scrollable login; system theme support; responsive grid density.
+- Added cloud-backed saved looks, collections and membership, packing membership and packed state, wear logging/history, and saved filter presets.
+- Paginated wardrobe and utility reads. Empty preference updates fail instead of claiming a save.
+
+## Live backend findings requiring release gates
+
+The connected project is healthy. Supabase security advisor returned no notices; this is not a complete security certification. All public tables inspected have RLS enabled.
+
+1. **Rate-limit bypass:** authenticated users can modify their own `rate_limit_counters` through the Data API. `consume_rate_limit` is invoker security and accepts caller-supplied limits/windows. Move counters to a private schema, use a narrowly granted function with fixed server policy, and test concurrent requests and direct counter tampering.
+2. **Incomplete export:** deployed `account-export` silently skips query failures, uses non-paginated reads, and omits collection/packing membership and import assets. Export must fail on unexpected errors and include all relevant rows with stable pagination.
+3. **Deletion errors:** deployed `delete-account` ignores storage listing/removal errors. It must stop and report failure, revoke sessions, and verify complete storage/account removal. Test with a disposable account, including storage failures and concurrent uploads.
+4. **Link ingestion:** URL import reads the whole response before checking actual byte size. DNS checks have gaps (including IPv6 literals and DNS rebinding); MIME/signatures alone do not sanitize metadata. Require bounded streaming and an egress policy enforcing the resolved destination at connection time.
+5. **Authentication:** password recovery currently requests an email but has no complete in-app recovery/password update route. Terms/privacy text needs actual approved policy documents and links. Production OAuth credentials and redirect configuration need verification.
+6. **Feature completeness:** utility screens support initial creation and membership but do not yet include edit/delete flows, outfit scheduling, full filtering parity, offline retry queues, and all macOS customization options. Automatic analysis/privacy preferences need server enforcement, not only saved settings.
+7. **Realtime:** needs reconnect/backoff and lifecycle tests, token expiration tests, and cross-account concurrency tests.
+8. **AI:** deployed functions use unpinned major Supabase imports; verify configured model availability and real image/stylist responses. Uploaded hashes are trusted when syntactically valid. Validate bytes server-side, enforce entitlements, and test prompt injection and unavailable garment exclusion.
+9. **Authorization relationships:** test that wear/outfit feedback/plan references cannot reference another user's objects, beyond simple `user_id` ownership.
+
+`backend/reference/` contains retrieved function source for review and reproducibility work. It is a snapshot, not a new deployment, and must not be deployed as a claimed hardened backend.
+
+## Distribution gates
+
+The debug APK uses a development certificate. The release AAB is unsigned until an owner-controlled upload key is configured. Never commit signing keys, passwords, service role keys, OAuth secrets, or user sessions. Production readiness additionally requires physical-device/emulator end-to-end tests, store signing and policy review, and the backend fixes above.

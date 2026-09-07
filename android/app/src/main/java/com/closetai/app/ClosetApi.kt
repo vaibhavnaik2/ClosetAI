@@ -1,5 +1,12 @@
 package com.closetai.app
 
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.Response
+import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -34,13 +41,13 @@ data class UserPreferencesAndroid(
     val autoAnalyze: Boolean = true
 )
 
-class ClosetApi {
-    val http = OkHttpClient.Builder()
+class ClosetApi(private val baseUrl: String = ClosetConfig.baseUrl,
+    val http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS)
         .writeTimeout(45, TimeUnit.SECONDS)
         .build()
-
+) {
     private fun request(
         path: String,
         method: String = "GET",
@@ -50,7 +57,7 @@ class ClosetApi {
         extraHeaders: Map<String, String> = emptyMap()
     ): Request {
         val builder = Request.Builder()
-            .url(ClosetConfig.baseUrl + path)
+            .url(baseUrl + path)
             .header("apikey", ClosetConfig.publishableKey)
 
         if (!token.isNullOrBlank()) builder.header("Authorization", "Bearer $token")
@@ -68,20 +75,51 @@ class ClosetApi {
         return builder.build()
     }
 
-    private suspend fun execute(request: Request): ByteArray = withContext(Dispatchers.IO) {
-        http.newCall(request).execute().use { response ->
-            val bytes = response.body?.bytes() ?: ByteArray(0)
-            if (!response.isSuccessful) {
-                val text = bytes.decodeToString()
-                val message = runCatching {
-                    val j = JSONObject(text)
-                    j.optString("msg").ifBlank {
-                        j.optString("message").ifBlank { j.optString("error").ifBlank { text } }
-                    }
-                }.getOrDefault(text)
-                throw IllegalStateException("HTTP ${response.code}: ${message.take(500)}")
+    private suspend fun execute(request: Request): ByteArray = suspendCancellableCoroutine { continuation ->
+        val call = http.newCall(request)
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                if (continuation.isActive) continuation.resumeWithException(e)
             }
-            bytes
+            override fun onResponse(call: Call, response: Response) {
+                try {
+                    val bytes = response.use {
+                        val source = it.body?.source()
+                        val buffer = okio.Buffer()
+                        if (source != null) {
+                            while (true) {
+                                val read = source.read(buffer, 8192)
+                                if (read == -1L) break
+                                require(buffer.size <= 25L * 1024 * 1024) { "Response exceeds the safe download limit" }
+                            }
+                        }
+                        if (!it.isSuccessful) {
+                            val message = when (it.code) {
+                                401 -> "Session expired or credentials are incorrect. Please sign in again."
+                                429 -> "Too many requests. Please try again later."
+                                else -> "Request failed (HTTP ${it.code}). Please retry."
+                            }
+                            throw IOException(message)
+                        }
+                        buffer.readByteArray()
+                    }
+                    if (continuation.isActive) continuation.resume(bytes)
+                } catch (e: Exception) {
+                    if (continuation.isActive) continuation.resumeWithException(e)
+                }
+            }
+        })
+    }
+
+    private suspend fun pagedRows(token: String, path: String): List<JSONObject> = buildList {
+        var offset = 0
+        while (true) {
+            val separator = if ('?' in path) "&" else "?"
+            val rows = JSONArray(execute(request("$path${separator}limit=500&offset=$offset", token = token)).decodeToString())
+            for (i in 0 until rows.length()) add(rows.getJSONObject(i))
+            if (rows.length() == 0) break
+            offset += rows.length()
         }
     }
 
@@ -127,6 +165,10 @@ class ClosetApi {
         return sessionFromAuth(result) ?: error("Session refresh failed")
     }
 
+    suspend fun signOut(token: String) {
+        execute(request("/auth/v1/logout?scope=local", "POST", token))
+    }
+
     suspend fun sendPasswordReset(email: String) {
         val payload = JSONObject().put("email", email.trim())
         execute(request("/auth/v1/recover", "POST", body = payload.toString().toByteArray()))
@@ -151,14 +193,7 @@ class ClosetApi {
 
     suspend fun items(token: String): List<WardrobeItem> {
         val select = "id,name,brand,category,product_type,primary_color,fabric_family,material,fit,mood,storage_path,status,is_favorite,wear_count,occasions,style_tags"
-        val bytes = execute(request(
-            "/rest/v1/wardrobe_items?select=$select&status=neq.archived&order=created_at.desc&limit=1000",
-            token = token
-        ))
-        val array = JSONArray(bytes.decodeToString())
-        return buildList {
-            for (i in 0 until array.length()) add(array.getJSONObject(i).toWardrobeItem())
-        }
+        return pagedRows(token, "/rest/v1/wardrobe_items?select=$select&status=neq.archived&order=created_at.desc,id.asc").map { it.toWardrobeItem() }
     }
 
     suspend fun preferences(token: String, userId: String): UserPreferencesAndroid {
@@ -196,7 +231,8 @@ class ClosetApi {
             extraHeaders = mapOf("Prefer" to "return=representation")
         ))
         val array = JSONArray(bytes.decodeToString())
-        return if (array.length() > 0) parsePreferences(array.getJSONObject(0)) else prefs
+        check(array.length() == 1) { "Preferences were not saved. Refresh your account and retry." }
+        return parsePreferences(array.getJSONObject(0))
     }
 
     private fun parsePreferences(j: JSONObject) = UserPreferencesAndroid(
@@ -368,4 +404,21 @@ class ClosetApi {
         val body = JSONObject().put("confirmation", "DELETE MY CLOSET")
         execute(request("/functions/v1/delete-account", "POST", token, body.toString().toByteArray()))
     }
+    suspend fun utilityRows(token: String, table: String): List<JSONObject> {
+        require(table in setOf("outfits", "wardrobe_collections", "packing_lists", "wear_events", "wardrobe_filter_presets", "packing_list_items", "wardrobe_collection_items"))
+        val order = when (table) { "packing_list_items" -> "packing_list_id.asc,item_id.asc"; "wardrobe_collection_items" -> "collection_id.asc,item_id.asc"; else -> "id.asc" }
+        return pagedRows(token, "/rest/v1/$table?select=*&order=$order")
+    }
+
+    suspend fun addUtility(token: String, table: String, body: JSONObject) {
+        require(table in setOf("wardrobe_collections", "packing_lists", "wear_events", "wardrobe_filter_presets", "packing_list_items", "wardrobe_collection_items"))
+        execute(request("/rest/v1/$table", "POST", token, body.toString().toByteArray()))
+    }
+
+    suspend fun setPacked(token: String, listId: String, itemId: String, packed: Boolean) {
+        UUID.fromString(listId); UUID.fromString(itemId)
+        execute(request("/rest/v1/packing_list_items?packing_list_id=eq.$listId&item_id=eq.$itemId", "PATCH", token,
+            JSONObject().put("packed", packed).toString().toByteArray()))
+    }
+
 }
