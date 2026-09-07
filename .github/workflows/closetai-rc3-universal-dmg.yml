@@ -28,6 +28,28 @@ jobs:
           echo "$SOURCE_SHA256  rc3.zip" | shasum -a 256 -c -
           unzip -q rc3.zip
           test -f ClosetAI_RC3/Package.swift
+          python3 - <<'PY'
+          from pathlib import Path
+          root = Path("ClosetAI_RC3/Sources/ClosetAICommercial")
+          fixes = {
+              "CustomizeView.swift": [
+                  ("if !v.isEmpty&&!values.contains(v)", "if !v.isEmpty && !values.contains(v)")
+              ],
+              "ImportCenterView.swift": [
+                  ("panel.runModal()==.OK", "panel.runModal() == .OK")
+              ],
+              "StylistView.swift": [
+                  ('ForEach(response.followUps,id:\\.self){Button($0){prompt=$0}.buttonStyle(.link)}',
+                   'ForEach(response.followUps, id: \\.self) { suggestion in Button(suggestion) { prompt = suggestion }.buttonStyle(.link) }')
+              ]
+          }
+          for name, pairs in fixes.items():
+              path = root / name
+              text = path.read_text()
+              for before, after in pairs:
+                  text = text.replace(before, after)
+              path.write_text(text)
+          PY
           swiftc -parse ClosetAI_RC3/Sources/ClosetAICommercial/*.swift
       - name: Build ARM64 release
         shell: bash
@@ -59,6 +81,28 @@ jobs:
           echo "$SOURCE_SHA256  rc3.zip" | shasum -a 256 -c -
           unzip -q rc3.zip
           test -f ClosetAI_RC3/Package.swift
+          python3 - <<'PY'
+          from pathlib import Path
+          root = Path("ClosetAI_RC3/Sources/ClosetAICommercial")
+          fixes = {
+              "CustomizeView.swift": [
+                  ("if !v.isEmpty&&!values.contains(v)", "if !v.isEmpty && !values.contains(v)")
+              ],
+              "ImportCenterView.swift": [
+                  ("panel.runModal()==.OK", "panel.runModal() == .OK")
+              ],
+              "StylistView.swift": [
+                  ('ForEach(response.followUps,id:\\.self){Button($0){prompt=$0}.buttonStyle(.link)}',
+                   'ForEach(response.followUps, id: \\.self) { suggestion in Button(suggestion) { prompt = suggestion }.buttonStyle(.link) }')
+              ]
+          }
+          for name, pairs in fixes.items():
+              path = root / name
+              text = path.read_text()
+              for before, after in pairs:
+                  text = text.replace(before, after)
+              path.write_text(text)
+          PY
           swiftc -parse ClosetAI_RC3/Sources/ClosetAICommercial/*.swift
       - name: Build Intel release
         shell: bash
